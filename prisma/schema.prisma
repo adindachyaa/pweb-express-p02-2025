@@ -1,0 +1,81 @@
+generator client {
+  provider = "prisma-client-js"
+}
+
+datasource db {
+  provider = "postgresql"
+  url      = env("DATABASE_URL")
+}
+
+model User {
+  id           String        @id @default(uuid())
+  username     String        @unique
+  email        String        @unique
+  password     String
+  createdAt    DateTime      @default(now())
+  updatedAt    DateTime      @updatedAt
+  transactions Transaction[]
+
+  @@map("users")
+}
+
+model Genre {
+  id          String   @id @default(uuid())
+  name        String   @unique
+  description String?
+  createdAt   DateTime @default(now())
+  updatedAt   DateTime @updatedAt
+  books       Book[]
+
+  @@map("genres")
+}
+
+model Book {
+  id                  String              @id @default(uuid())
+  title               String              @unique
+  author              String
+  publisher           String
+  publicationYear     Int
+  isbn                String              @unique
+  price               Float
+  stock               Int
+  description         String?
+  genreId             String
+  createdAt           DateTime            @default(now())
+  updatedAt           DateTime            @updatedAt
+  genre               Genre               @relation(fields: [genreId], references: [id], onDelete: Restrict)
+  transactionDetails  TransactionDetail[]
+
+  @@map("books")
+  @@index([genreId])
+}
+
+model Transaction {
+  id                 String              @id @default(uuid())
+  userId             String
+  totalAmount        Float
+  transactionDate    DateTime            @default(now())
+  createdAt          DateTime            @default(now())
+  updatedAt          DateTime            @updatedAt
+  user               User                @relation(fields: [userId], references: [id])
+  transactionDetails TransactionDetail[]
+
+  @@map("transactions")
+  @@index([userId])
+}
+
+model TransactionDetail {
+  id            String      @id @default(uuid())
+  transactionId String
+  bookId        String
+  quantity      Int
+  price         Float
+  subtotal      Float
+  createdAt     DateTime    @default(now())
+  updatedAt     DateTime    @updatedAt
+  transaction   Transaction @relation(fields: [transactionId], references: [id], onDelete: Cascade)
+  book          Book        @relation(fields: [bookId], references: [id], onDelete: Restrict)
+
+  @@map("transaction_details")
+  @@index([bookId])
+}
