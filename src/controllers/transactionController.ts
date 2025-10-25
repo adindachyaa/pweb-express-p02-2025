@@ -1,288 +1,179 @@
-import { Request, Response } from 'express';
-import prisma from '../prisma';
+import { Request, Response } from "express";
+import prisma from "../utils/prisma";
 
-export const createTransaction = async (req: Request, res: Response): Promise<void> => {
+export const createTransaction = async (req: Request, res: Response) => {
   try {
-    const userId = req.user?.id;
     const { items } = req.body;
 
-    if (!userId) {
-      res.status(401).json({
-        success: false,
-        message: 'Unauthorized'
-      });
-      return;
-    }
-
     if (!items || !Array.isArray(items) || items.length === 0) {
-      res.status(400).json({
+      return res.status(400).json({
         success: false,
-        message: 'Items are required'
+        message: "Items are required to create a transaction",
       });
-      return;
     }
 
-    for (const item of items) {
-      if (!item.bookId || !item.quantity || item.quantity <= 0) {
-        res.status(400).json({
-          success: false,
-          message: 'Invalid item data'
-        });
-        return;
-      }
-    }
-
-    const bookIds = items.map(item => item.bookId);
+    // Ambil buku yang dipesan
+    const bookIds = items.map((item) => item.bookId);
     const books = await prisma.book.findMany({
-      where: { id: { in: bookIds } }
+      where: { id: { in: bookIds } },
     });
 
-    if (books.length !== bookIds.length) {
-      res.status(404).json({
-        success: false,
-        message: 'One or more books not found'
-      });
-      return;
-    }
+    let totalAmount = 0;
 
+    // Validasi stok dan hitung total
     for (const item of items) {
-      const book = books.find(b => b.id === item.bookId);
+      const book = books.find((b) => b.id === item.bookId);
       if (!book) {
-        res.status(404).json({
+        return res.status(404).json({
           success: false,
-          message: `Book not found`
+          message: `Book with ID ${item.bookId} not found`,
         });
-        return;
       }
 
       if (book.stock < item.quantity) {
-        res.status(400).json({
+        return res.status(400).json({
           success: false,
-          message: `Insufficient stock for book: ${book.title}`
-        });
-        return;
-      }
-    }
-
-    let totalAmount = 0;
-    const transactionDetails = [];
-
-    for (const item of items) {
-      const book = books.find(b => b.id === item.bookId);
-      if (book) {
-        const subtotal = book.price * item.quantity;
-        totalAmount += subtotal;
-
-        transactionDetails.push({
-          bookId: item.bookId,
-          quantity: item.quantity,
-          price: book.price,
-          subtotal
+          message: `Insufficient stock for book ${book.title}`,
         });
       }
+
+      totalAmount += book.price * item.quantity;
     }
 
-    const transaction = await prisma.transaction.create({
-      data: {
-        userId,
-        totalAmount,
-        transactionDetails: {
-          create: transactionDetails
-        }
-      },
-      include: {
-        transactionDetails: {
-          include: {
-            book: {
-              include: {
-                genre: true
-              }
-            }
-          }
-        }
+    const transaction = await prisma.$transaction(async (prismaClient) => {
+      // Buat transaksi utama
+      const newTransaction = await prismaClient.transaction.create({
+        data: {
+          userId: (req as any).user.id,
+          totalAmount,
+          transactionDetails: {
+            create: items.map((item) => {
+              const book = books.find((b) => b.id === item.bookId)!;
+              return {
+                bookId: item.bookId,
+                quantity: item.quantity,
+                price: book.price,
+                subtotal: book.price * item.quantity,
+              };
+            }),
+          },
+        },
+        include: {
+          transactionDetails: { include: { book: true } },
+          user: true,
+        },
+      });
+
+      // Update stok buku
+      for (const item of items) {
+        await prismaClient.book.update({
+          where: { id: item.bookId },
+          data: { stock: { decrement: item.quantity } },
+        });
       }
+
+      return newTransaction;
     });
 
-    for (const item of items) {
-      await prisma.book.update({
-        where: { id: item.bookId },
-        data: {
-          stock: {
-            decrement: item.quantity
-          }
-        }
-      });
-    }
-
-    res.status(201).json({
+    return res.status(201).json({
       success: true,
-      message: 'Transaction created successfully',
-      data: transaction
+      message: "Transaction created successfully",
+      data: transaction,
     });
   } catch (error) {
-    res.status(500).json({
+    console.error(error);
+    return res.status(500).json({
       success: false,
-      message: 'Internal server error'
+      message: "Failed to create transaction",
     });
   }
 };
 
-export const getAllTransactions = async (req: Request, res: Response): Promise<void> => {
+//  GET ALL TRANSACTIONS
+export const getAllTransactions = async (_req: Request, res: Response) => {
   try {
     const transactions = await prisma.transaction.findMany({
       include: {
-        user: {
-          select: {
-            id: true,
-            username: true,
-            email: true
-          }
-        },
-        transactionDetails: {
-          include: {
-            book: {
-              include: {
-                genre: true
-              }
-            }
-          }
-        }
+        user: true,
+        transactionDetails: { include: { book: true } },
       },
-      orderBy: {
-        transactionDate: 'desc'
-      }
     });
 
-    res.status(200).json({
+    return res.status(200).json({
       success: true,
-      message: 'Transactions retrieved successfully',
-      data: transactions
+      message: "Transactions retrieved successfully",
+      data: transactions,
     });
   } catch (error) {
-    res.status(500).json({
+    console.error(error);
+    return res.status(500).json({
       success: false,
-      message: 'Internal server error'
+      message: "Failed to fetch transactions",
     });
   }
 };
 
-export const getTransactionDetail = async (req: Request, res: Response): Promise<void> => {
+//  GET TRANSACTION DETAIL
+export const getTransactionDetail = async (req: Request, res: Response) => {
   try {
-    const { transaction_id } = req.params;
-
+    const { id } = req.params; // <-- harus sama dengan route parameter
     const transaction = await prisma.transaction.findUnique({
-      where: { id: transaction_id },
+      where: { id }, // pakai id dari URL
       include: {
-        user: {
-          select: {
-            id: true,
-            username: true,
-            email: true
-          }
-        },
+        user: true,
         transactionDetails: {
-          include: {
-            book: {
-              include: {
-                genre: true
-              }
-            }
-          }
-        }
-      }
+          include: { book: true },
+        },
+      },
     });
 
     if (!transaction) {
-      res.status(404).json({
+      return res.status(404).json({
         success: false,
-        message: 'Transaction not found'
+        message: "Transaction not found",
       });
-      return;
     }
 
-    res.status(200).json({
+    return res.status(200).json({
       success: true,
-      message: 'Transaction details retrieved successfully',
-      data: transaction
+      message: "Transaction detail retrieved successfully",
+      data: transaction,
     });
   } catch (error) {
-    res.status(500).json({
+    console.error(error);
+    return res.status(500).json({
       success: false,
-      message: 'Internal server error'
+      message: "Failed to fetch transaction detail",
     });
   }
 };
 
-export const getTransactionStatistics = async (req: Request, res: Response): Promise<void> => {
+//  GET TRANSACTION STATISTICS
+export const getTransactionStatistics = async (_req: Request, res: Response) => {
   try {
-    const transactions = await prisma.transaction.findMany({
-      include: {
-        transactionDetails: {
-          include: {
-            book: {
-              include: {
-                genre: true
-              }
-            }
-          }
-        }
-      }
+    const stats = await prisma.transaction.aggregate({
+      _sum: { totalAmount: true },
+      _count: true,
     });
 
-    const totalTransactions = transactions.length;
-
-    const totalAmount = transactions.reduce((sum, t) => sum + t.totalAmount, 0);
-    const averageTransaction = totalTransactions > 0 ? totalAmount / totalTransactions : 0;
-
-    const genreCount: Record<string, { count: number; name: string }> = {};
-
-    transactions.forEach(transaction => {
-      transaction.transactionDetails.forEach(detail => {
-        const genreId = detail.book.genreId;
-        const genreName = detail.book.genre.name;
-
-        if (!genreCount[genreId]) {
-          genreCount[genreId] = { count: 0, name: genreName };
-        }
-        genreCount[genreId].count += detail.quantity;
-      });
+    const totalBooks = await prisma.transactionDetail.aggregate({
+      _sum: { quantity: true },
     });
 
-    const genreEntries = Object.entries(genreCount);
-
-    let mostPopularGenre = null;
-    let leastPopularGenre = null;
-
-    if (genreEntries.length > 0) {
-      genreEntries.sort((a, b) => b[1].count - a[1].count);
-
-      mostPopularGenre = {
-        genreId: genreEntries[0][0],
-        genreName: genreEntries[0][1].name,
-        totalTransactions: genreEntries[0][1].count
-      };
-
-      leastPopularGenre = {
-        genreId: genreEntries[genreEntries.length - 1][0],
-        genreName: genreEntries[genreEntries.length - 1][1].name,
-        totalTransactions: genreEntries[genreEntries.length - 1][1].count
-      };
-    }
-
-    res.status(200).json({
+    return res.status(200).json({
       success: true,
-      message: 'Transaction statistics retrieved successfully',
+      message: "Transaction statistics retrieved successfully",
       data: {
-        totalTransactions,
-        averageTransaction,
-        mostPopularGenre,
-        leastPopularGenre
-      }
+        totalTransactions: stats._count,
+        totalBooksSold: totalBooks._sum?.quantity || 0,
+        totalRevenue: stats._sum?.totalAmount || 0,
+      },
     });
   } catch (error) {
-    res.status(500).json({
+    console.error(error);
+    return res.status(500).json({
       success: false,
-      message: 'Internal server error'
+      message: "Failed to fetch transaction statistics",
     });
   }
 };
