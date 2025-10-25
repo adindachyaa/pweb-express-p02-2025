@@ -1,9 +1,11 @@
+// src/controllers/genreController.ts
 import { Request, Response } from 'express';
-import prisma from '../prisma';
+import prisma from '../utils/prisma';
 
+// Create Genre
 export const createGenre = async (req: Request, res: Response): Promise<void> => {
   try {
-    const { name, description } = req.body;
+    const { name } = req.body;
 
     if (!name) {
       res.status(400).json({
@@ -14,7 +16,7 @@ export const createGenre = async (req: Request, res: Response): Promise<void> =>
     }
 
     const existingGenre = await prisma.genre.findUnique({
-      where: { name }
+      where: { name } // field 'name' exists in model
     });
 
     if (existingGenre) {
@@ -26,10 +28,7 @@ export const createGenre = async (req: Request, res: Response): Promise<void> =>
     }
 
     const genre = await prisma.genre.create({
-      data: {
-        name,
-        description
-      }
+      data: { name }
     });
 
     res.status(201).json({
@@ -37,28 +36,32 @@ export const createGenre = async (req: Request, res: Response): Promise<void> =>
       message: 'Genre created successfully',
       data: genre
     });
-  } catch (error) {
+  } catch (error: any) {
+    console.error('❌ CREATE GENRE ERROR:', error);
     res.status(500).json({
       success: false,
-      message: 'Internal server error'
+      message: 'Internal server error',
+      error: error.message || String(error)
     });
   }
 };
 
-export const getAllGenres = async (req: Request, res: Response): Promise<void> => {
+// Get All Genres
+export const getAllGenres = async (_req: Request, res: Response): Promise<void> => {
   try {
     const genres = await prisma.genre.findMany({
-      orderBy: {
-        name: 'asc'
-      }
+      orderBy: { name: 'asc' },
+      select: { id: true, name: true, createdAt: true, updatedAt: true } // pilih field yang mau return
     });
 
+    // jika mau menyesuaikan key createdAt -> created_at, lakukan mapping di sini
     res.status(200).json({
       success: true,
       message: 'Genres retrieved successfully',
       data: genres
     });
-  } catch (error) {
+  } catch (error: any) {
+    console.error('❌ GET ALL GENRES ERROR:', error);
     res.status(500).json({
       success: false,
       message: 'Internal server error'
@@ -66,21 +69,17 @@ export const getAllGenres = async (req: Request, res: Response): Promise<void> =
   }
 };
 
+// Get Genre Detail
 export const getGenreDetail = async (req: Request, res: Response): Promise<void> => {
   try {
-    const { genre_id } = req.params;
+    const genreId = req.params.genre_id as string; // route param tetap genre_id
 
+    // gunakan field 'id' di Prisma (tipe string/UUID)
     const genre = await prisma.genre.findUnique({
-      where: { id: genre_id },
+      where: { id: genreId },
       include: {
         books: {
-          select: {
-            id: true,
-            title: true,
-            author: true,
-            price: true,
-            stock: true
-          }
+          select: { id: true, title: true, author: true, price: true, stock: true }
         }
       }
     });
@@ -95,10 +94,11 @@ export const getGenreDetail = async (req: Request, res: Response): Promise<void>
 
     res.status(200).json({
       success: true,
-      message: 'Genre details retrieved successfully',
+      message: 'Genre detail retrieved successfully',
       data: genre
     });
-  } catch (error) {
+  } catch (error: any) {
+    console.error('❌ GET GENRE DETAIL ERROR:', error);
     res.status(500).json({
       success: false,
       message: 'Internal server error'
@@ -106,43 +106,24 @@ export const getGenreDetail = async (req: Request, res: Response): Promise<void>
   }
 };
 
+// Update Genre
 export const updateGenre = async (req: Request, res: Response): Promise<void> => {
   try {
-    const { genre_id } = req.params;
-    const { name, description } = req.body;
+    const genreId = req.params.genre_id as string;
+    const { name } = req.body;
 
-    const existingGenre = await prisma.genre.findUnique({
-      where: { id: genre_id }
-    });
-
-    if (!existingGenre) {
-      res.status(404).json({
-        success: false,
-        message: 'Genre not found'
-      });
-      return;
-    }
-
-    if (name && name !== existingGenre.name) {
-      const duplicateGenre = await prisma.genre.findUnique({
-        where: { name }
-      });
-
-      if (duplicateGenre) {
-        res.status(400).json({
-          success: false,
-          message: 'Genre name already exists'
-        });
+    // optional: cek duplikasi nama
+    if (name) {
+      const dup = await prisma.genre.findUnique({ where: { name } });
+      if (dup && dup.id !== genreId) {
+        res.status(400).json({ success: false, message: 'Genre name already exists' });
         return;
       }
     }
 
     const updatedGenre = await prisma.genre.update({
-      where: { id: genre_id },
-      data: {
-        ...(name && { name }),
-        ...(description !== undefined && { description })
-      }
+      where: { id: genreId },
+      data: { ...(name !== undefined && { name }) }
     });
 
     res.status(200).json({
@@ -150,36 +131,27 @@ export const updateGenre = async (req: Request, res: Response): Promise<void> =>
       message: 'Genre updated successfully',
       data: updatedGenre
     });
-    } catch (error) {
-    console.error('GENRE ERROR:', error);
-    res.status(500).json({
-    success: false,
-    message: 'Internal server error',
-    error: error instanceof Error ? error.message : String(error)
-  });
-}
-};
-
-export const deleteGenre = async (req: Request, res: Response): Promise<void> => {
-  try {
-    const { genre_id } = req.params;
-
-    const genre = await prisma.genre.findUnique({
-      where: { id: genre_id },
-      include: {
-        books: true
-      }
-    });
-
-    if (!genre) {
-      res.status(404).json({
-        success: false,
-        message: 'Genre not found'
-      });
+  } catch (error: any) {
+    console.error('❌ UPDATE GENRE ERROR:', error);
+    if (error.code === 'P2025') {
+      res.status(404).json({ success: false, message: 'Genre not found' });
       return;
     }
+    res.status(500).json({
+      success: false,
+      message: 'Internal server error'
+    });
+  }
+};
 
-    if (genre.books.length > 0) {
+// Delete Genre
+export const deleteGenre = async (req: Request, res: Response): Promise<void> => {
+  try {
+    const genreId = req.params.genre_id as string;
+
+    // cek dulu apakah ada buku pada genre
+    const booksCount = await prisma.book.count({ where: { genreId: genreId } });
+    if (booksCount > 0) {
       res.status(400).json({
         success: false,
         message: 'Cannot delete genre with existing books'
@@ -188,14 +160,19 @@ export const deleteGenre = async (req: Request, res: Response): Promise<void> =>
     }
 
     await prisma.genre.delete({
-      where: { id: genre_id }
+      where: { id: genreId }
     });
 
     res.status(200).json({
       success: true,
       message: 'Genre deleted successfully'
     });
-  } catch (error) {
+  } catch (error: any) {
+    console.error('❌ DELETE GENRE ERROR:', error);
+    if (error.code === 'P2025') {
+      res.status(404).json({ success: false, message: 'Genre not found' });
+      return;
+    }
     res.status(500).json({
       success: false,
       message: 'Internal server error'
